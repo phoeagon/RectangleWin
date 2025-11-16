@@ -89,11 +89,6 @@ func main() {
 		(HotKey{id: 2, mod: MOD_ALT | MOD_WIN | MOD_NOREPEAT, vk: w32.VK_RIGHT, callback: func() { cycleEdgeFuncs(1) }}),
 		(HotKey{id: 3, mod: MOD_ALT | MOD_WIN | MOD_NOREPEAT, vk: w32.VK_UP, callback: func() { cycleEdgeFuncs(2) }}),
 		(HotKey{id: 4, mod: MOD_ALT | MOD_WIN | MOD_NOREPEAT, vk: w32.VK_DOWN, callback: func() { cycleEdgeFuncs(3) }}),
-		// Corner func #1
-		(HotKey{id: 5, mod: MOD_CONTROL | MOD_ALT | MOD_WIN | MOD_NOREPEAT, vk: w32.VK_LEFT, callback: func() { cycleCornerFuncs(0) }}),
-		(HotKey{id: 6, mod: MOD_CONTROL | MOD_ALT | MOD_WIN | MOD_NOREPEAT, vk: w32.VK_UP, callback: func() { cycleCornerFuncs(1) }}),
-		(HotKey{id: 7, mod: MOD_CONTROL | MOD_ALT | MOD_WIN | MOD_NOREPEAT, vk: w32.VK_DOWN, callback: func() { cycleCornerFuncs(2) }}),
-		(HotKey{id: 8, mod: MOD_CONTROL | MOD_ALT | MOD_WIN | MOD_NOREPEAT, vk: w32.VK_RIGHT, callback: func() { cycleCornerFuncs(3) }}),
 		(HotKey{id: 50, mod: MOD_SHIFT | MOD_WIN, vk: 0x46 /*F*/, callback: func() {
 			lastResized = 0 // cause edgeFuncTurn to be reset
 			if err := maximize(); err != nil {
@@ -215,6 +210,32 @@ func main() {
 						return
 					}
 				}}))
+		case "nextDisplay":
+			id += 1
+			hks = append(hks, (HotKey{
+				id:  id,
+				mod: int(keyBinding.CombinedMod) | MOD_NOREPEAT,
+				vk:  int(keyBinding.KeyCode),
+				callback: func() {
+					lastResized = 0 // cause edgeFunction to be reset
+					if _, err := resizeAcrossMonitor(w32.GetForegroundWindow(), center, 1 /* next display */); err != nil {
+						fmt.Printf("warn: resize: %v\n", err)
+						return
+					}
+				}}))
+		case "previousDisplay", "prevDisplay":
+			id += 1
+			hks = append(hks, (HotKey{
+				id:  id,
+				mod: int(keyBinding.CombinedMod) | MOD_NOREPEAT,
+				vk:  int(keyBinding.KeyCode),
+				callback: func() {
+					lastResized = 0 // cause edgeFunction to be reset
+					if _, err := resizeAcrossMonitor(w32.GetForegroundWindow(), center, -1 /* PREV display */); err != nil {
+						fmt.Printf("warn: resize: %v\n", err)
+						return
+					}
+				}}))
 		default:
 			continue
 		}
@@ -271,12 +292,54 @@ func center(disp, cur w32.RECT) w32.RECT {
 }
 
 func resize(hwnd w32.HWND, f resizeFunc) (bool, error) {
+	return resizeAcrossMonitor(hwnd, f, 0)
+}
+func resizeAcrossMonitor(hwnd w32.HWND, f resizeFunc, monitorIndexDiff int) (bool, error) {
 	if !isZonableWindow(hwnd) {
 		fmt.Printf("warn: non-zonable window: %s\n", w32.GetWindowText(hwnd))
 		return false, nil
 	}
 	rect := w32.GetWindowRect(hwnd)
 	mon := w32.MonitorFromWindow(hwnd, w32.MONITOR_DEFAULTTONEAREST)
+	if monitorIndexDiff != 0 {
+		monitorCount := w32.GetSystemMetrics(80 /*SM_CMONITORS*/)
+		fmt.Printf("original monitorIndexDiff: %d monitorCount: %d\n", monitorIndexDiff, monitorCount)
+		if monitorIndexDiff < 0 {
+			monitorIndexDiff = monitorIndexDiff % monitorCount
+			// we need to blindly add monitorCount, because even if
+			// this is zero, the loop below doesn't return the original
+			// in the foundOriginal setting true path.
+			monitorIndexDiff += monitorCount
+		}
+		fmt.Printf("canonicalized monitorIndexDiff: %d\n", monitorIndexDiff)
+		foundOriginal := false
+		foundTarget := false
+		cnt := 0
+		originalWindowMonitor := mon
+		// iterate for max of 20 times
+		for i := 0; i < 20 && !foundTarget; i++ {
+			EnumMonitors(func(d w32.HMONITOR) bool {
+				if d == originalWindowMonitor {
+					foundOriginal = true
+				} else if foundOriginal {
+					cnt += 1
+					if cnt == monitorIndexDiff {
+						mon = d
+						foundTarget = true
+						return false // stop iterating
+					}
+				}
+				// continue to iterate
+				return true
+			})
+		}
+		// after this iteration, we either have found a new target based on
+		// monitorIndex, or we have given up.
+		if !foundTarget {
+			// if we gave up, fall back to the original window.
+			mon = originalWindowMonitor
+		}
+	}
 	hdc := w32.GetDC(hwnd)
 	displayDPI := w32.GetDeviceCaps(hdc, w32.LOGPIXELSY)
 	if !w32.ReleaseDC(hwnd, hdc) {

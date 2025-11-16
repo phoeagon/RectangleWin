@@ -82,12 +82,10 @@ func convertModifier(keyName string) (int32, error) {
 		return MOD_ALT, nil
 	case "shift":
 		return MOD_SHIFT, nil
-	case "win":
-	case "meta":
-	case "super":
+	case "win", "meta", "super":
 		return MOD_WIN, nil
 	default:
-		return 0, errors.New("invalid keyname")
+		return 0, errors.New("invalid keyname " + keyName + strings.ToLower(keyName))
 	}
 	return 0, errors.New("unreachable")
 }
